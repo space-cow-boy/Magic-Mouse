@@ -4,21 +4,16 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.magicmouse.android.controller.MouseController
-import com.magicmouse.android.network.Protocol
-import kotlinx.coroutines.flow.StateFlow
+import com.magicmouse.android.network.BluetoothDeviceItem
 
 /**
  * ViewModel that owns the MouseController lifecycle.
- *
- * Using AndroidViewModel (needs Application for SensorManager context).
- * The viewModelScope lives as long as the ViewModel — which survives
- * configuration changes (screen rotation etc), preventing sensor restart.
  */
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val controller = MouseController(application)
 
-    // Expose controller state flows directly (the ViewModel is the bridge)
+    // Expose controller state flows directly
     val connectionState = controller.connectionState
     val sensorSnapshot  = controller.sensorSnapshot
 
@@ -35,8 +30,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         controller.start(viewModelScope)
     }
 
-    fun connect(host: String, port: Int = Protocol.DEFAULT_PORT) =
-        controller.connect(host, port)
+    fun getPairedDevices(): List<BluetoothDeviceItem> = controller.getPairedDevices()
+
+    fun connect(deviceAddress: String, deviceName: String = "PC") =
+        controller.connect(deviceAddress, deviceName)
 
     fun disconnect() = controller.disconnect()
 

@@ -1,18 +1,20 @@
 package com.magicmouse.android.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.view.MotionEvent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -25,12 +27,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInteropFilter
-import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -38,7 +40,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.magicmouse.android.MainViewModel
 import com.magicmouse.android.controller.ConnectionState
 import com.magicmouse.android.controller.SensorSnapshot
-import kotlin.math.abs
+import com.magicmouse.android.network.BluetoothDeviceItem
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -46,79 +48,121 @@ fun MainScreen(viewModel: MainViewModel) {
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val sensorSnapshot  by viewModel.sensorSnapshot.collectAsStateWithLifecycle()
     var sensitivity     by remember { mutableFloatStateOf(viewModel.sensitivity) }
-
-    // Connection form state
-    var hostInput by remember { mutableStateOf("192.168.1.") }
-    var portInput by remember { mutableStateOf("5555") }
-    val focusManager = LocalFocusManager.current
+    var isFullscreen    by remember { mutableStateOf(false) }
 
     val isConnected = connectionState is ConnectionState.Connected
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(Color(0xFF0A0A0F), Color(0xFF12121A))
-                )
-            )
-    ) {
-        Column(
+    if (isFullscreen) {
+        // Fullscreen Trackpad Mode overlay
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // ── Header ────────────────────────────────────────────────────────
-            AppHeader(connectionState)
-
-            // ── Touch Pad Area (the Magic Mouse surface) ──────────────────────
-            TouchPadArea(
-                isConnected = isConnected,
-                onTouchEvent = { event ->
+                .background(Color(0xFF0A0A0F))
+                .pointerInteropFilter { event ->
                     viewModel.controller.gestureDetector.onTouchEvent(event)
-                }
-            )
-
-            // ── Connection Card ───────────────────────────────────────────────
-            ConnectionCard(
-                connectionState = connectionState,
-                hostInput = hostInput,
-                portInput = portInput,
-                onHostChange = { hostInput = it },
-                onPortChange = { portInput = it },
-                onConnect = {
-                    focusManager.clearFocus()
-                    viewModel.connect(hostInput, portInput.toIntOrNull() ?: 5555)
                 },
-                onDisconnect = { viewModel.disconnect() }
-            )
-
-            // ── Controls Row ──────────────────────────────────────────────────
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // Recenter button
-                ControlButton(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Default.MyLocation,
-                    label = "Recenter",
-                    onClick = { viewModel.recenter() }
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = Icons.Default.TouchApp,
+                    contentDescription = null,
+                    tint = Color(0xFF64D2FF).copy(alpha = 0.5f),
+                    modifier = Modifier.size(64.dp)
                 )
-                // Sensitivity
-                SensitivityCard(
-                    modifier = Modifier.weight(2f),
-                    sensitivity = sensitivity,
-                    onSensitivityChange = {
-                        sensitivity = it
-                        viewModel.sensitivity = it
-                    }
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    text = "Fullscreen Trackpad Active",
+                    color = Color(0xFFE5E5EA),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Tap · Scroll · Drag anywhere",
+                    color = Color(0xFF8E8E93),
+                    fontSize = 13.sp
                 )
             }
 
-            // ── Sensor Debug Panel ────────────────────────────────────────────
-            SensorDebugPanel(sensorSnapshot)
+            // Floating Exit Fullscreen Button
+            IconButton(
+                onClick = { isFullscreen = false },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(24.dp)
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF2C2C2E))
+            ) {
+                Icon(
+                    imageVector = Icons.Default.FullscreenExit,
+                    contentDescription = "Exit Fullscreen",
+                    tint = Color(0xFFE5E5EA)
+                )
+            }
+        }
+    } else {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(Color(0xFF0A0A0F), Color(0xFF12121A))
+                    )
+                )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 20.dp, vertical = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // ── Header ────────────────────────────────────────────────────────
+                AppHeader(connectionState)
+
+                // ── Touch Pad Area with Fullscreen Button ──────────────────────────
+                TouchPadArea(
+                    isConnected = isConnected,
+                    onFullscreenClick = { isFullscreen = true },
+                    onTouchEvent = { event ->
+                        viewModel.controller.gestureDetector.onTouchEvent(event)
+                    }
+                )
+
+                // ── Connection Card (Bluetooth HID - No PC App Required) ───────────
+                ConnectionCard(
+                    connectionState = connectionState,
+                    viewModel = viewModel,
+                    onConnect = { address, name ->
+                        viewModel.connect(address, name)
+                    },
+                    onDisconnect = { viewModel.disconnect() }
+                )
+
+                // ── Controls Row ──────────────────────────────────────────────────
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    ControlButton(
+                        modifier = Modifier.weight(1f),
+                        icon = Icons.Default.MyLocation,
+                        label = "Recenter",
+                        onClick = { viewModel.recenter() }
+                    )
+                    SensitivityCard(
+                        modifier = Modifier.weight(2f),
+                        sensitivity = sensitivity,
+                        onSensitivityChange = {
+                            sensitivity = it
+                            viewModel.sensitivity = it
+                        }
+                    )
+                }
+
+                // ── Sensor Debug Panel ────────────────────────────────────────────
+                SensorDebugPanel(sensorSnapshot)
+            }
         }
     }
 }
@@ -152,16 +196,15 @@ private fun AppHeader(connectionState: ConnectionState) {
             )
             Text(
                 text = when (connectionState) {
-                    is ConnectionState.Connected  -> "Connected · ${connectionState.host}"
-                    is ConnectionState.Connecting -> "Connecting…"
+                    is ConnectionState.Connected  -> "Connected · ${connectionState.deviceName}"
+                    is ConnectionState.Connecting -> "Connecting as Mouse…"
                     is ConnectionState.Error      -> "Error: ${connectionState.message}"
-                    else                          -> "Not connected"
+                    else                          -> "Ready (No PC app required)"
                 },
                 fontSize = 13.sp,
                 color = Color(0xFF8E8E93)
             )
         }
-        // Status dot with pulse animation when connecting
         Box(
             modifier = Modifier
                 .size(14.dp)
@@ -177,6 +220,7 @@ private fun AppHeader(connectionState: ConnectionState) {
 @Composable
 private fun TouchPadArea(
     isConnected: Boolean,
+    onFullscreenClick: () -> Unit,
     onTouchEvent: (MotionEvent) -> Boolean
 ) {
     val borderColor by animateColorAsState(
@@ -188,7 +232,7 @@ private fun TouchPadArea(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(220.dp)
+            .height(200.dp)
             .clip(RoundedCornerShape(24.dp))
             .background(Color(0xFF1C1C1E))
             .border(1.dp, borderColor, RoundedCornerShape(24.dp))
@@ -232,6 +276,24 @@ private fun TouchPadArea(
                 )
             }
         }
+
+        // Fullscreen button in top-right corner of touchpad
+        IconButton(
+            onClick = onFullscreenClick,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(12.dp)
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF2C2C2E).copy(alpha = 0.8f))
+        ) {
+            Icon(
+                imageVector = Icons.Default.Fullscreen,
+                contentDescription = "Fullscreen Trackpad",
+                tint = Color(0xFF64D2FF),
+                modifier = Modifier.size(20.dp)
+            )
+        }
     }
 }
 
@@ -240,15 +302,48 @@ private fun TouchPadArea(
 @Composable
 private fun ConnectionCard(
     connectionState: ConnectionState,
-    hostInput: String,
-    portInput: String,
-    onHostChange: (String) -> Unit,
-    onPortChange: (String) -> Unit,
-    onConnect: () -> Unit,
+    viewModel: MainViewModel,
+    onConnect: (String, String) -> Unit,
     onDisconnect: () -> Unit
 ) {
+    val context = LocalContext.current
     val isConnected   = connectionState is ConnectionState.Connected
     val isConnecting  = connectionState is ConnectionState.Connecting
+
+    var pairedDevices by remember { mutableStateOf<List<BluetoothDeviceItem>>(emptyList()) }
+    var selectedDevice by remember { mutableStateOf<BluetoothDeviceItem?>(null) }
+    var expanded by remember { mutableStateOf(false) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions.values.all { it }
+        if (granted) {
+            pairedDevices = viewModel.getPairedDevices()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+
+        if (hasPermission) {
+            pairedDevices = viewModel.getPairedDevices()
+        } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                permissionLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.BLUETOOTH_CONNECT,
+                        Manifest.permission.BLUETOOTH_SCAN
+                    )
+                )
+            }
+        }
+    }
 
     Surface(
         shape = RoundedCornerShape(20.dp),
@@ -257,53 +352,105 @@ private fun ConnectionCard(
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Windows PC", fontWeight = FontWeight.SemiBold, color = Color(0xFF8E8E93), fontSize = 12.sp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Bluetooth Mouse (HID)", fontWeight = FontWeight.SemiBold, color = Color(0xFF8E8E93), fontSize = 12.sp)
+                    Text("No PC app required", fontSize = 10.sp, color = Color(0xFF30D158))
+                }
+                if (!isConnected) {
+                    TextButton(onClick = {
+                        pairedDevices = viewModel.getPairedDevices()
+                    }) {
+                        Text("Refresh", fontSize = 11.sp, color = Color(0xFF64D2FF))
+                    }
+                }
+            }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = hostInput,
-                    onValueChange = onHostChange,
-                    label = { Text("IP Address") },
-                    singleLine = true,
-                    enabled = !isConnected,
-                    modifier = Modifier.weight(3f),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Number,
-                        imeAction = ImeAction.Next
-                    ),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor   = Color(0xFF64D2FF),
-                        unfocusedBorderColor = Color(0xFF3A3A3C),
-                        focusedLabelColor    = Color(0xFF64D2FF),
-                        cursorColor          = Color(0xFF64D2FF)
-                    )
-                )
-                OutlinedTextField(
-                    value = portInput,
-                    onValueChange = onPortChange,
-                    label = { Text("Port") },
-                    singleLine = true,
-                    enabled = !isConnected,
-                    modifier = Modifier.weight(1.4f),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Number,
-                        imeAction = ImeAction.Done
-                    ),
-                    keyboardActions = KeyboardActions(onDone = { if (!isConnected) onConnect() }),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor   = Color(0xFF64D2FF),
-                        unfocusedBorderColor = Color(0xFF3A3A3C),
-                        focusedLabelColor    = Color(0xFF64D2FF),
-                        cursorColor          = Color(0xFF64D2FF)
-                    )
-                )
+            if (!isConnected) {
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = { expanded = true },
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color(0xFFE5E5EA),
+                            containerColor = Color(0xFF2C2C2E)
+                        ),
+                        border = BorderStroke(1.dp, Color(0xFF3A3A3C))
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = selectedDevice?.name ?: if (pairedDevices.isEmpty()) "No paired PCs found" else "Select paired PC...",
+                                color = if (selectedDevice != null) Color(0xFFE5E5EA) else Color(0xFF8E8E93)
+                            )
+                            Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = Color(0xFF8E8E93))
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                        modifier = Modifier.background(Color(0xFF2C2C2E))
+                    ) {
+                        if (pairedDevices.isEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text("No paired devices found", color = Color(0xFF8E8E93)) },
+                                onClick = { expanded = false }
+                            )
+                        } else {
+                            pairedDevices.forEach { device ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(device.name, color = Color(0xFFE5E5EA), fontWeight = FontWeight.Medium)
+                                            Text(device.address, color = Color(0xFF8E8E93), fontSize = 11.sp)
+                                        }
+                                    },
+                                    onClick = {
+                                        selectedDevice = device
+                                        expanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                val conn = connectionState as ConnectionState.Connected
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF2C2C2E))
+                        .padding(12.dp)
+                ) {
+                    Text("Connected to PC as Mouse:", fontSize = 11.sp, color = Color(0xFF8E8E93))
+                    Text(conn.deviceName, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFF30D158))
+                    Text(conn.deviceAddress, fontSize = 11.sp, color = Color(0xFF8E8E93))
+                }
             }
 
             Button(
-                onClick = if (isConnected) onDisconnect else onConnect,
+                onClick = {
+                    if (isConnected) {
+                        onDisconnect()
+                    } else {
+                        selectedDevice?.let { dev ->
+                            onConnect(dev.address, dev.name)
+                        }
+                    }
+                },
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 shape = RoundedCornerShape(14.dp),
-                enabled = !isConnecting,
+                enabled = !isConnecting && (isConnected || selectedDevice != null),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (isConnected) Color(0xFF3A3A3C) else Color(0xFF64D2FF),
                     contentColor   = if (isConnected) Color(0xFFE5E5EA) else Color(0xFF001F2E)
@@ -317,7 +464,7 @@ private fun ConnectionCard(
                     )
                 } else {
                     Text(
-                        if (isConnected) "Disconnect" else "Connect",
+                        if (isConnected) "Disconnect" else "Connect as Bluetooth Mouse",
                         fontWeight = FontWeight.SemiBold
                     )
                 }
@@ -329,7 +476,7 @@ private fun ConnectionCard(
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun ControlButton(modifier: Modifier, icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+private fun ControlButton(modifier: Modifier, icon: ImageVector, label: String, onClick: () -> Unit) {
     Button(
         onClick = onClick,
         modifier = modifier.height(52.dp),
@@ -395,7 +542,7 @@ private fun SensorDebugPanel(snapshot: SensorSnapshot) {
             ) {
                 Text("Sensor Debug", fontWeight = FontWeight.SemiBold, color = Color(0xFF8E8E93), fontSize = 12.sp)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("${snapshot.packetsSent} pkts", fontSize = 11.sp, color = Color(0xFF30D158))
+                    Text("${snapshot.packetsSent} reports", fontSize = 11.sp, color = Color(0xFF30D158))
                     Spacer(Modifier.width(8.dp))
                     IconButton(onClick = { expanded = !expanded }, modifier = Modifier.size(24.dp)) {
                         Icon(
@@ -416,7 +563,6 @@ private fun SensorDebugPanel(snapshot: SensorSnapshot) {
                 SensorRow("Orientation", snapshot.pitch, snapshot.yaw, snapshot.roll, "°",   Color(0xFF30D158))
                 Spacer(Modifier.height(8.dp))
 
-                // Orientation visualizer — shows pitch/yaw as a point in a box
                 OrientationVisualizer(pitch = snapshot.pitch, yaw = snapshot.yaw)
 
                 Spacer(Modifier.height(8.dp))
@@ -452,9 +598,7 @@ private fun RowScope.AxisBar(axis: String, value: Float, color: Color) {
     val clamped = (value / 20f).coerceIn(-1f, 1f)
     Canvas(modifier = Modifier.weight(1f).height(4.dp)) {
         val w = size.width; val h = size.height
-        // Background track
         drawLine(Color(0xFF3A3A3C), Offset(0f, h / 2f), Offset(w, h / 2f), strokeWidth = h, cap = StrokeCap.Round)
-        // Value bar from center
         val center = w / 2f
         val end = center + clamped * center
         drawLine(color.copy(alpha = 0.8f), Offset(center, h / 2f), Offset(end, h / 2f), strokeWidth = h, cap = StrokeCap.Round)
@@ -489,11 +633,9 @@ private fun OrientationVisualizer(pitch: Float, yaw: Float) {
             val cx = w / 2f + clampedX * (w / 2f - 16.dp.toPx())
             val cy = h / 2f + clampedY * (h / 2f - 8.dp.toPx())
 
-            // Grid lines
             drawLine(Color(0xFF2C2C2E), Offset(w / 2f, 0f), Offset(w / 2f, h), 1f)
             drawLine(Color(0xFF2C2C2E), Offset(0f, h / 2f), Offset(w, h / 2f), 1f)
 
-            // Cursor dot
             drawCircle(dotColor.copy(alpha = 0.25f), radius = 18f, center = Offset(cx, cy))
             drawCircle(dotColor, radius = 6f, center = Offset(cx, cy))
         }

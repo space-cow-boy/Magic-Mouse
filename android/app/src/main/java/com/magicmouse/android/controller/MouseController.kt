@@ -1,8 +1,9 @@
 package com.magicmouse.android.controller
 
 import android.content.Context
+import com.magicmouse.android.network.BluetoothDeviceItem
+import com.magicmouse.android.network.BluetoothHidClient
 import com.magicmouse.android.network.Protocol
-import com.magicmouse.android.network.UdpClient
 import com.magicmouse.android.sensor.FusedOrientation
 import com.magicmouse.android.sensor.MotionProcessor
 import com.magicmouse.android.sensor.SensorFusion
@@ -18,7 +19,7 @@ import kotlinx.coroutines.flow.*
 sealed class ConnectionState {
     object Disconnected : ConnectionState()
     object Connecting   : ConnectionState()
-    data class Connected(val host: String, val port: Int) : ConnectionState()
+    data class Connected(val deviceName: String, val deviceAddress: String) : ConnectionState()
     data class Error(val message: String)    : ConnectionState()
 }
 
@@ -34,18 +35,7 @@ data class SensorSnapshot(
 )
 
 /**
- * MouseController is the central orchestrator.
- *
- * Responsibilities:
- *   - Start/stop sensor reading
- *   - Run the sensor fusion + motion processing pipeline
- *   - Send motion packets at ~100 Hz via UDP
- *   - Forward gesture events as click/scroll packets
- *   - Expose state flows for the Compose UI to observe
- *
- * The sensor → network pipeline runs on a dedicated coroutine scope
- * using Dispatchers.Default (CPU-bound processing) to avoid blocking
- * the main thread or the sensor callback thread.
+ * MouseController is the central orchestrator using native Bluetooth HID.
  */
 class MouseController(context: Context) {
 
@@ -53,7 +43,7 @@ class MouseController(context: Context) {
     val sensorReader     = SensorReader(context)
     private val fusion   = SensorFusion()
     val motionProcessor  = MotionProcessor()
-    val udpClient        = UdpClient()
+    val bluetoothHidClient = BluetoothHidClient(context)
     val gestureDetector  = GestureDetector { event -> handleGesture(event) }
 
     // ── Coroutine scope (lifecycle managed externally by ViewModel) ────────────
@@ -66,9 +56,6 @@ class MouseController(context: Context) {
     private val _sensorSnapshot = MutableStateFlow(SensorSnapshot())
     val sensorSnapshot: StateFlow<SensorSnapshot> = _sensorSnapshot.asStateFlow()
 
-    // ── Send rate limiting ─────────────────────────────────────────────────────
-    // We target ~100 Hz (10ms between packets). Since sensor events arrive at
-    // ~100-200 Hz, we send every other reading rather than on every event.
     private var frameCount = 0L
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -89,12 +76,14 @@ class MouseController(context: Context) {
     //  Connection management
     // ─────────────────────────────────────────────────────────────────────────
 
-    fun connect(host: String, port: Int = Protocol.DEFAULT_PORT) {
+    fun getPairedDevices(): List<BluetoothDeviceItem> = bluetoothHidClient.getPairedDevices()
+
+    fun connect(deviceAddress: String, deviceName: String = "PC") {
         scope?.launch {
             _connectionState.value = ConnectionState.Connecting
-            val error = udpClient.connect(host, port)
+            val error = bluetoothHidClient.connect(deviceAddress)
             _connectionState.value = if (error == null) {
-                ConnectionState.Connected(host, port)
+                ConnectionState.Connected(deviceName, deviceAddress)
             } else {
                 ConnectionState.Error(error)
             }
@@ -103,7 +92,7 @@ class MouseController(context: Context) {
 
     fun disconnect() {
         scope?.launch {
-            udpClient.disconnect()
+            bluetoothHidClient.disconnect()
             _connectionState.value = ConnectionState.Disconnected
         }
     }
@@ -124,7 +113,6 @@ class MouseController(context: Context) {
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun startSensorPipeline(scope: CoroutineScope) {
-        // Collect gyro events and drive the fusion + motion pipeline
         scope.launch(Dispatchers.Default) {
             sensorReader.gyroFlow.collect { gyro ->
                 val accel = sensorReader.latestAccel
@@ -142,13 +130,12 @@ class MouseController(context: Context) {
                     accelX = accel.x, accelY = accel.y, accelZ = accel.z,
                     pitch = orientation.pitch, yaw = orientation.yaw, roll = orientation.roll,
                     cursorDx = dx, cursorDy = dy,
-                    packetsSent = udpClient.packetsSent
+                    packetsSent = bluetoothHidClient.packetsSent
                 )
 
-                // 4. Send motion packet (only if connected and significant movement)
-                if (udpClient.isConnected) {
-                    // Always send at full rate — let Windows smoother handle it
-                    udpClient.sendMotion(dx, dy)
+                // 4. Send motion report (only if connected)
+                if (bluetoothHidClient.isConnected) {
+                    bluetoothHidClient.sendMotion(dx, dy)
                 }
             }
         }
@@ -159,18 +146,24 @@ class MouseController(context: Context) {
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun handleGesture(event: GestureEvent) {
-        // Notify motion processor that touch is active (adjusts dead zone)
         motionProcessor.isTouching = when (event) {
             is GestureEvent.DragStart -> true
             is GestureEvent.DragEnd   -> false
             else -> motionProcessor.isTouching
         }
 
-        if (!udpClient.isConnected) return
+        if (!bluetoothHidClient.isConnected) return
 
-        val packet = gestureDetector.gestureToPacket(event) ?: return
-        scope?.launch(Dispatchers.IO) {
-            udpClient.sendRaw(packet)
+        when (event) {
+            is GestureEvent.LeftClick   -> bluetoothHidClient.sendClick(Protocol.ClickType.SINGLE_CLICK, Protocol.Button.LEFT)
+            is GestureEvent.DoubleClick -> bluetoothHidClient.sendClick(Protocol.ClickType.DOUBLE_CLICK, Protocol.Button.LEFT)
+            is GestureEvent.RightClick  -> bluetoothHidClient.sendClick(Protocol.ClickType.SINGLE_CLICK, Protocol.Button.RIGHT)
+            is GestureEvent.DragStart   -> bluetoothHidClient.sendClick(Protocol.ClickType.PRESS, Protocol.Button.LEFT)
+            is GestureEvent.DragEnd     -> bluetoothHidClient.sendClick(Protocol.ClickType.RELEASE, Protocol.Button.LEFT)
+            is GestureEvent.ScrollV     -> bluetoothHidClient.sendScroll(event.amount)
+            is GestureEvent.ScrollH     -> bluetoothHidClient.sendScroll(0f, event.amount)
+            is GestureEvent.DragMove    -> bluetoothHidClient.sendMotion(event.dx * 2f, event.dy * 2f)
+            is GestureEvent.TrackpadMove -> bluetoothHidClient.sendMotion(event.dx * 2f, event.dy * 2f)
         }
     }
 }
