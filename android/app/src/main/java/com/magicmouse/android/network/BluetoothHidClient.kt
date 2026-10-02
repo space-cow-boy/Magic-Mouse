@@ -22,6 +22,7 @@ class BluetoothHidClient(private val context: Context) {
 
     private var hidDevice: BluetoothHidDevice? = null
     private var connectedHost: BluetoothDevice? = null
+    private var isAppRegistered: Boolean = false
 
     private var buttonStateBits: Int = 0
     private var totalPacketsSent: Long = 0L
@@ -84,11 +85,17 @@ class BluetoothHidClient(private val context: Context) {
             if (profile == BluetoothProfile.HID_DEVICE) {
                 hidDevice = null
                 connectedHost = null
+                isAppRegistered = false
             }
         }
     }
 
     private val hidCallback = object : BluetoothHidDevice.Callback() {
+        override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
+            super.onAppStatusChanged(pluggedDevice, registered)
+            isAppRegistered = registered
+        }
+
         override fun onConnectionStateChanged(device: BluetoothDevice?, state: Int) {
             super.onConnectionStateChanged(device, state)
             if (state == BluetoothProfile.STATE_CONNECTED) {
@@ -122,7 +129,9 @@ class BluetoothHidClient(private val context: Context) {
         )
         try {
             hidDevice?.registerApp(sdp, null, qos, Executors.newSingleThreadExecutor(), hidCallback)
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+            isAppRegistered = false
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -131,7 +140,7 @@ class BluetoothHidClient(private val context: Context) {
         if (!adapter.isEnabled) return emptyList()
         return try {
             adapter.bondedDevices?.map {
-                BluetoothDeviceItem(name = it.name ?: "Unknown", address = it.address)
+                BluetoothDeviceItem(name =it.name ?: "Unknown", address = it.address)
             } ?: emptyList()
         } catch (_: Exception) {
             emptyList()
@@ -142,11 +151,13 @@ class BluetoothHidClient(private val context: Context) {
     fun connect(deviceAddress: String): String? {
         val adapter = bluetoothAdapter ?: return "Bluetooth not available"
         if (!adapter.isEnabled) return "Bluetooth is turned off"
+        if (!isAppRegistered) return "Bluetooth HID service not ready yet. Please wait a moment and try again."
+
         val device = adapter.getRemoteDevice(deviceAddress) ?: return "Device not found"
         
         return try {
             val success = hidDevice?.connect(device) ?: false
-            if (success) null else "Failed to initiate Bluetooth HID connection"
+            if (success) null else "Failed to initiate Bluetooth HID connection. Try connecting from your PC Bluetooth settings instead."
         } catch (e: Exception) {
             e.message ?: "Connection error"
         }
